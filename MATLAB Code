@@ -1,0 +1,72 @@
+clc
+clear
+close all
+
+%% STEP 1: Load Dataset
+datasetPath = 'Dataset';
+imds = imageDatastore(datasetPath,...
+'IncludeSubfolders',true,...
+'LabelSource','foldernames');
+disp('Dataset Loaded')
+countEachLabel(imds)
+
+%% STEP 2: Split Data
+[trainData,testData] = splitEachLabel(imds,0.8,'randomized');
+
+%% STEP 3: Load Pretrained ResNet50
+net = resnet50;
+
+%% STEP 4: Resize Images
+inputSize = net.Layers(1).InputSize;
+% Data Augmentation (Improves Accuracy)
+imageAugmenter = imageDataAugmenter( ...
+'RandRotation',[-20 20], ...
+'RandXTranslation',[-10 10], ...
+RandYTranslation',[-10 10]);
+augTrain = augmentedImageDatastore(inputSize(1:2),trainData,...
+'DataAugmentation',imageAugmenter);
+augTest = augmentedImageDatastore(inputSize(1:2),testData);
+
+%% STEP 5: Modify Network
+lgraph = layerGraph(net);
+numClasses = numel(unique(imds.Labels));
+newLayers = [
+fullyConnectedLayer(numClasses,'Name','fc_new')
+softmaxLayer('Name','softmax')
+classificationLayer('Name','classoutput')
+];
+lgraph = replaceLayer(lgraph,'fc1000',newLayers(1));
+lgraph = replaceLayer(lgraph,'fc1000_softmax',newLayers(2));
+lgraph = replaceLayer(lgraph,'ClassificationLayer_fc1000',newLayers(3));
+
+%% STEP 6: Training Options
+options = trainingOptions('adam', ...
+'MiniBatchSize',16, ...
+'MaxEpochs',10, ... % Increased for better accuracy
+'InitialLearnRate',1e-4, ...
+'Plots','training-progress', ...
+'Verbose',false);
+
+%% STEP 7: Train Network
+trainedNet = trainNetwork(augTrain,lgraph,options);
+
+%% STEP 8: Test Accuracy
+YPred = classify(trainedNet,augTest);
+YTest = testData.Labels;
+accuracy = mean(YPred == YTest);
+disp(['Accuracy: ', num2str(accuracy*100), '%'])
+
+%% STEP 9: Test Multiple Images
+testFolder = 'TestImages'; % Create this folder and upload images
+testImgs = imageDatastore(testFolder);
+for i = 1:length(testImgs.Files)
+img = readimage(testImgs,i);
+imgResized = imresize(img,inputSize(1:2));
+label = classify(trainedNet,imgResized);
+figure
+imshow(img)
+title(['Detected Disease: ' char(label)])
+end
+
+%% STEP 10: Save Model
+save('resnetFruitModel.mat','trainedNet')
